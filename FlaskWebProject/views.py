@@ -28,6 +28,7 @@ def home():
         posts=posts
     )
 
+
 @app.route('/new_post', methods=['GET', 'POST'])
 @login_required
 def new_post():
@@ -67,9 +68,11 @@ def login():
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
         if user is None or not user.check_password(form.password.data):
+            app.logger.info(f'Login failed for: {form.username.data}')
             flash('Invalid username or password')
             return redirect(url_for('login'))
         login_user(user, remember=form.remember_me.data)
+        app.logger.info(f'Login succeeded for: {user.username}')
         next_page = request.args.get('next')
         if not next_page or url_parse(next_page).netloc != '':
             next_page = url_for('home')
@@ -83,19 +86,24 @@ def authorized():
     if request.args.get('state') != session.get("state"):
         return redirect(url_for("home"))  # No-OP. Goes back to Index page
     if "error" in request.args:  # Authentication/Authorization failure
+        app.logger.info(f'Microsoft Login Failed For : {request.args["error"]}')
         return render_template("auth_error.html", result=request.args)
     if request.args.get('code'):
         cache = _load_cache()
-        # TODO: Acquire a token from a built msal app, along with the appropriate redirect URI
-        result = None
+        app_msal = _build_msal_app(cache=cache,authority=Config.AUTHORITY)
+        result = app_msal.acquire_token_by_authorization_code(request.args['code'], 
+                                                              scopes=Config.SCOPE, 
+                                                              redirect_uri=url_for('authorized', 
+                                                                                   _external=True, 
+                                                                                   _scheme='https') )
         if "error" in result:
+            app.logger.info(f'Token search failed: {result["error"]}')
             return render_template("auth_error.html", result=result)
         session["user"] = result.get("id_token_claims")
-        # Note: In a real app, we'd use the 'name' property from session["user"] below
-        # Here, we'll use the admin username for anyone who is authenticated by MS
         user = User.query.filter_by(username="admin").first()
         login_user(user)
         _save_cache(cache)
+        app.logger.info(f'Microsoft login succeeded for: {session["user"]["name"]}')
     return redirect(url_for('home'))
 
 @app.route('/logout')
